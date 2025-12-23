@@ -162,7 +162,7 @@
             <button id="modal-confirm-btn" disabled class="w-full bg-[#d42426] text-white py-4 rounded-2xl font-bold text-lg shadow-xl shadow-red-200 disabled:opacity-50 disabled:bg-slate-300 transition-all active:scale-95">
                 <span id="modal-timer-text">โปรดรอ 3 วิ</span>
             </button>
-            <button id="modal-cancel-btn" class="w-full mt-4 text-slate-400 text-sm font-bold hover:text-slate-600">แก้ไขข้อมูล</button>
+            <button id="modal-cancel-btn" class="w-full mt-4 text-slate-400 text-sm font-bold hover:text-slate-600 py-2">แก้ไขข้อมูล</button>
         </div>
     </div>
 
@@ -179,8 +179,10 @@
                 <input type="text" id="exchangePassInput" maxlength="5" placeholder="•••••" 
                     class="w-full bg-slate-50 border-2 border-slate-100 px-5 py-4 rounded-2xl text-2xl font-mono tracking-[0.5em] text-center focus:border-[#d42426] outline-none transition-all uppercase">
                 <div id="exchangeError" class="hidden p-2 bg-red-50 text-red-600 text-xs rounded-xl font-bold text-center">รหัสผ่านไม่ถูกต้อง</div>
-                <button id="exchange-confirm-btn" class="w-full bg-[#165b33] text-white py-4 rounded-2xl font-bold text-lg shadow-lg shadow-green-100 active:scale-95">ยืนยัน</button>
-                <button id="exchange-cancel-btn" class="w-full text-slate-400 text-sm font-bold">ยกเลิก</button>
+                <button id="exchange-confirm-btn" class="w-full bg-[#165b33] text-white py-4 rounded-2xl font-bold text-lg shadow-lg shadow-green-100 active:scale-95 disabled:bg-slate-400 disabled:shadow-none">
+                    <span id="exchange-btn-text">ยืนยัน</span>
+                </button>
+                <button id="exchange-cancel-btn" class="w-full text-slate-400 text-sm font-bold py-2">ยกเลิก</button>
             </div>
         </div>
     </div>
@@ -206,7 +208,6 @@
         const STAFF_PASSWORD = "christmassci";
         const EXCHANGE_PASSWORD = "CRM25";
         
-        // --- อัปเดต URL ของ Google Apps Script เรียบร้อยแล้ว ---
         const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwDG5NG9gwJHcnkYVJidMWUFo71gcT1Ddp8LMSgh7CIbYtbGNE4I9dNwk03g-J5X2zQUQ/exec"; 
 
         const TOTAL_STAMPS = 3;
@@ -407,7 +408,7 @@
                                 ${currentStudent.submitted ? `
                                     <div class="p-5 bg-green-50 text-[#165b33] rounded-2xl font-bold border-2 border-[#165b33]">ส่งคำขอสำเร็จแล้ว ✓</div>
                                 ` : `
-                                    <button id="finalSubmit" class="w-full bg-[#d42426] text-white py-5 rounded-2xl font-black text-xl flex items-center justify-center gap-2 shadow-xl hover:bg-red-700 active:scale-95 transition-all disabled:bg-slate-400">
+                                    <button id="finalSubmit" class="w-full bg-[#d42426] text-white py-5 rounded-2xl font-black text-xl flex items-center justify-center gap-2 shadow-xl hover:bg-red-700 active:scale-95 transition-all disabled:bg-slate-400 disabled:shadow-none">
                                         <span id="final-btn-text">${isLate() ? 'แลกชั่วโมงกิจกรรม' : 'ลุ้นโชคจับรางวัล'}</span>
                                         <i data-lucide="chevron-right"></i>
                                     </button>
@@ -432,18 +433,43 @@
         // --- Logic Handlers ---
         
         const showExchangeModal = () => {
+            // Reset state if modal is opened to ensure it's clickable
+            isSubmittingFinal = false; 
+            
             exchangeModal.classList.remove('hidden');
             const input = document.getElementById('exchangePassInput');
             const confirmBtn = document.getElementById('exchange-confirm-btn');
             const btnText = document.getElementById('exchange-btn-text');
-            input.value = ""; document.getElementById('exchangeError').classList.add('hidden');
-            document.getElementById('exchange-cancel-btn').onclick = () => exchangeModal.classList.add('hidden');
+            const cancelBtn = document.getElementById('exchange-cancel-btn');
+            
+            input.value = ""; 
+            input.disabled = false;
+            confirmBtn.disabled = false;
+            btnText.innerText = "ยืนยัน"; 
+            document.getElementById('exchangeError').classList.add('hidden');
+            
+            cancelBtn.onclick = () => {
+                exchangeModal.classList.add('hidden');
+            };
+
             confirmBtn.onclick = async () => {
                 if (input.value.toUpperCase() === EXCHANGE_PASSWORD) {
-                    confirmBtn.disabled = true; btnText.innerText = "กำลังประมวลผล...";
-                    await handleFinalSubmit('Transcript');
-                    exchangeModal.classList.add('hidden');
-                } else document.getElementById('exchangeError').classList.remove('hidden');
+                    confirmBtn.disabled = true; 
+                    btnText.innerText = "กำลังประมวลผล..."; 
+                    input.disabled = true;
+                    
+                    const success = await handleFinalSubmit('Transcript');
+                    if (success) {
+                        exchangeModal.classList.add('hidden');
+                    } else {
+                        // Re-enable if error occurs
+                        confirmBtn.disabled = false;
+                        btnText.innerText = "ยืนยัน";
+                        input.disabled = false;
+                    }
+                } else {
+                    document.getElementById('exchangeError').classList.remove('hidden');
+                }
             };
         };
 
@@ -470,7 +496,7 @@
             try {
                 const snap = await getDoc(docRef);
                 if (snap.exists()) {
-                    if (snap.data().deviceId !== deviceId) {
+                    if (snap.data().deviceId !== deviceId && snap.data().deviceId !== null) {
                         if (!isAutoLogin) { document.getElementById('errorText').innerText = "รหัสนักศึกษานี้ถูกใช้งานในอุปกรณ์อื่นแล้ว"; document.getElementById('loginError').classList.remove('hidden'); }
                         else { clearStudentCache(); renderLogin(); }
                         isLoggingIn = false; return;
@@ -531,11 +557,14 @@
         }
 
         async function handleFinalSubmit(type) {
-            if (isSubmittingFinal) return; isSubmittingFinal = true;
-            const btn = document.getElementById('finalSubmit');
-            if (btn) { btn.disabled = true; }
+            if (isSubmittingFinal) return false; 
+            isSubmittingFinal = true;
+            
+            const mainBtn = document.getElementById('finalSubmit');
+            if (mainBtn) mainBtn.disabled = true;
 
             try {
+                // Send to Google Sheet
                 await fetch(GOOGLE_SCRIPT_URL, {
                     method: 'POST',
                     mode: 'no-cors',
@@ -547,6 +576,7 @@
                     })
                 });
 
+                // Update Firebase
                 await updateDoc(doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber), { 
                     submitted: true, 
                     submittedAt: Date.now(),
@@ -554,9 +584,13 @@
                 });
                 
                 alert("ยินดีด้วย! ส่งข้อมูลเข้าร่วมกิจกรรมเรียบร้อยแล้ว");
+                return true;
             } catch (e) { 
                 alert("เกิดข้อผิดพลาด: " + e.message); 
-                isSubmittingFinal = false; renderDashboard(); 
+                isSubmittingFinal = false; 
+                if (mainBtn) mainBtn.disabled = false;
+                renderDashboard();
+                return false;
             }
         }
 
@@ -582,8 +616,8 @@
                 const card = document.getElementById('staff-user-card');
                 card.innerHTML = `<div class="bg-[#165b33] rounded-3xl p-8 text-white shadow-xl animate-in fade-in slide-in-from-bottom-4">
                     <p class="text-[10px] uppercase font-bold text-green-200 mb-1">ยืนยัน: ${BOOTH_NAMES[user.targetBooth]}</p>
-                    <h3 class="text-3xl font-mono font-bold mb-4">${user.studentNumber}</h3>
-                    <div class="grid grid-cols-1 gap-3">
+                    <h3 class="text-3xl font-mono font-bold mb-4 text-balance">${user.studentNumber}</h3>
+                    <div class="grid grid-cols-1 gap-3 text-center">
                          <button id="staffConfirm" class="py-4 bg-white text-[#165b33] rounded-2xl font-bold shadow-lg active:scale-95">ประทับตรา</button>
                          <button id="staffResetDevice" class="py-2 text-[10px] text-red-200 font-bold uppercase tracking-widest border border-red-400/30 rounded-xl">ล้างข้อมูลอุปกรณ์ (Reset Device)</button>
                          <button id="staffCancel" class="py-2 text-[10px] text-white/50 font-bold uppercase">ยกเลิก</button>
