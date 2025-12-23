@@ -34,6 +34,11 @@
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
         #reader { width: 100% !important; border: none !important; border-radius: 1.5rem; overflow: hidden; }
         #reader video { border-radius: 1.5rem; }
+        
+        .modal-overlay {
+            background-color: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(4px);
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen">
@@ -54,7 +59,7 @@
         <main id="view-container" class="flex-1 flex flex-col justify-center">
             <div id="status-display" class="flex flex-col items-center gap-4 text-center">
                 <div class="loading-spinner"></div>
-                <p class="text-sm font-medium text-slate-400">Initializing System...</p>
+                <p id="status-text" class="text-sm font-medium text-slate-400">Initializing System...</p>
             </div>
         </main>
 
@@ -63,6 +68,30 @@
                 Booth Event System &bull; Secured
             </p>
         </footer>
+    </div>
+
+    <!-- Modal for ID Confirmation -->
+    <div id="confirm-modal" class="fixed inset-0 z-50 hidden flex items-center justify-center p-6 modal-overlay">
+        <div class="bg-white w-full max-w-sm rounded-[2rem] p-8 shadow-2xl animate-in fade-in zoom-in-95 duration-200">
+            <div class="text-center mb-6">
+                <div class="bg-blue-50 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 text-blue-600">
+                    <i data-lucide="user-check"></i>
+                </div>
+                <h3 class="text-xl font-bold text-slate-800">Confirm Your ID</h3>
+                <p class="text-slate-400 text-sm mt-1">Please verify your student number</p>
+            </div>
+            
+            <div class="bg-slate-50 py-4 rounded-2xl text-center mb-8 border border-slate-100">
+                <span id="confirm-id-display" class="text-2xl font-mono font-black tracking-widest text-blue-700">65XXXXXXXX</span>
+            </div>
+
+            <button id="modal-confirm-btn" disabled class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg disabled:opacity-50 disabled:bg-slate-300 transition-all active:scale-95 flex items-center justify-center gap-2">
+                <span id="modal-timer-text">Wait 3s</span>
+            </button>
+            <button id="modal-cancel-btn" class="w-full mt-3 text-slate-400 text-sm font-medium hover:text-slate-600 py-2">
+                Correction
+            </button>
+        </div>
     </div>
 
     <script type="module">
@@ -87,16 +116,18 @@
 
         const TOTAL_STAMPS = 3;
         const OTP_SECONDS = 180;
-        const DEADLINE = { hour: 20, min: 12 };
-
+        
+        let globalDeadline = { hour: 20, min: 12 };
         let currentStudent = null;
         let otpInterval = null;
         let unsubscribeStudent = null;
+        let unsubscribeSettings = null;
         let html5QrCode = null;
-        let isLoggingIn = false; // Added missing global variable declaration
+        let isLoggingIn = false;
 
         const container = document.getElementById('view-container');
         const exitBtn = document.getElementById('exitBtn');
+        const confirmModal = document.getElementById('confirm-modal');
 
         const showView = (html) => {
             container.innerHTML = html;
@@ -112,35 +143,36 @@
             return id;
         };
 
+        const saveStudentCache = (id) => localStorage.setItem('cached_student_id', id);
+        const getStudentCache = () => localStorage.getItem('cached_student_id');
+        const clearStudentCache = () => localStorage.removeItem('cached_student_id');
+
+        // --- UI Renders ---
+
         const renderLogin = () => {
             exitBtn.classList.add('hidden');
             showView(`
                 <div class="bg-white rounded-[2.5rem] p-8 shadow-xl border border-slate-100 animate-in fade-in zoom-in-95 duration-300">
                     <h2 class="text-3xl font-extrabold mb-2 text-slate-800 text-center">Join Event</h2>
                     <p class="text-slate-400 text-sm mb-8 text-center">Enter your 10-digit ID to participate.</p>
-                    
                     <div class="space-y-4">
                         <input type="text" id="studentIdInput" maxlength="10" placeholder="Student ID" 
                             class="w-full bg-slate-50 border-2 border-slate-100 px-5 py-4 rounded-2xl text-xl font-mono tracking-[0.2em] text-center focus:border-blue-500 outline-none transition-all">
-                        
-                        <div id="loginError" class="hidden p-3 bg-red-50 text-red-600 text-[10px] rounded-xl flex items-center gap-2 font-bold uppercase">
+                        <div id="loginError" class="hidden p-3 bg-red-50 text-red-600 text-[11px] rounded-xl flex items-center justify-center gap-2 font-bold uppercase text-center">
                             <i data-lucide="alert-circle" size="14"></i> <span id="errorText"></span>
                         </div>
-
                         <button id="loginSubmit" class="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg active:scale-95 transition-all">
                             Continue
                         </button>
                     </div>
-
-                    <div class="mt-8 flex flex-col gap-3">
+                    <div class="mt-8 flex flex-col gap-3 text-center">
                         <button id="staffAuthBtn" class="text-slate-300 text-[10px] font-bold uppercase tracking-widest hover:text-blue-500 transition-colors">
                             Staff Portal
                         </button>
                     </div>
                 </div>
             `);
-
-            document.getElementById('loginSubmit').onclick = handleLogin;
+            document.getElementById('loginSubmit').onclick = handleInitialLogin;
             document.getElementById('staffAuthBtn').onclick = renderStaffLogin;
         };
 
@@ -152,7 +184,7 @@
                     <p class="text-slate-400 text-sm mb-6">Enter password to manage booths.</p>
                     <input type="password" id="staffPassInput" placeholder="Password" 
                         class="w-full bg-slate-50 border-2 border-slate-100 px-5 py-4 rounded-2xl text-center mb-4 focus:border-blue-500 outline-none">
-                    <div id="passError" class="hidden mb-4 p-3 bg-red-50 text-red-600 text-xs rounded-xl font-bold">Incorrect password</div>
+                    <div id="passError" class="hidden mb-4 p-3 bg-red-50 text-red-600 text-xs rounded-xl font-bold text-center">Incorrect password</div>
                     <button id="passSubmit" class="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold shadow-lg active:scale-95 transition-all">Access Portal</button>
                 </div>
             `);
@@ -170,24 +202,42 @@
                     <div class="flex justify-between items-center px-2">
                         <h2 class="text-xl font-bold flex items-center gap-2"><i data-lucide="shield-check" class="text-blue-600"></i> Staff Dashboard</h2>
                     </div>
+
                     <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
                         <label class="block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Verification Code</label>
-                        <div class="flex gap-2">
+                        <div class="flex flex-col gap-3">
                             <input type="text" id="staffOtpInput" maxlength="4" placeholder="CODE" 
                                 class="flex-1 bg-slate-50 border-2 border-slate-100 px-5 py-4 rounded-2xl text-2xl font-mono font-bold tracking-[0.3em] text-center focus:border-blue-500 outline-none">
-                            <button id="staffVerify" class="bg-slate-900 text-white px-6 rounded-2xl font-bold active:scale-95">Verify</button>
+                            <button id="staffVerify" class="w-full bg-slate-900 text-white py-4 rounded-2xl font-bold active:scale-95 shadow-md">Verify Code</button>
                         </div>
                         <p id="staffError" class="hidden text-red-500 text-xs mt-3 font-medium text-center"></p>
                     </div>
+
                     <div id="staff-user-card" class="hidden"></div>
+
                     <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
-                        <h4 class="text-sm font-bold mb-4">Booth QR Generator</h4>
-                        <div class="grid grid-cols-3 gap-2 mb-4">
-                            <button onclick="generateBoothQr(1)" class="py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-bold">BOOTH 1</button>
-                            <button onclick="generateBoothQr(2)" class="py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-bold">BOOTH 2</button>
-                            <button onclick="generateBoothQr(3)" class="py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-bold">BOOTH 3</button>
+                        <h4 class="text-sm font-bold mb-4 flex items-center gap-2"><i data-lucide="clock" size="16"></i> Reward Deadline</h4>
+                        <div class="flex items-center gap-3">
+                            <div class="flex-1">
+                                <label class="text-[9px] font-bold text-slate-400">Hour (0-23)</label>
+                                <input type="number" id="deadlineHour" value="${globalDeadline.hour}" min="0" max="23" class="w-full bg-slate-50 border border-slate-100 p-3 rounded-xl text-center font-bold">
+                            </div>
+                            <div class="flex-1">
+                                <label class="text-[9px] font-bold text-slate-400">Min (0-59)</label>
+                                <input type="number" id="deadlineMin" value="${globalDeadline.min}" min="0" max="59" class="w-full bg-slate-50 border border-slate-100 p-3 rounded-xl text-center font-bold">
+                            </div>
+                            <button id="saveDeadline" class="mt-4 bg-blue-600 text-white px-4 py-3 rounded-xl font-bold text-xs shadow-md">Save</button>
                         </div>
-                        <div id="qrcode-wrapper" class="hidden p-4 bg-slate-50 rounded-2xl text-center">
+                    </div>
+
+                    <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+                        <h4 class="text-sm font-bold mb-4 text-center">QR Generator</h4>
+                        <div class="grid grid-cols-3 gap-2 mb-4">
+                            <button onclick="generateBoothQr(1)" class="py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-bold border border-blue-100">BOOTH 1</button>
+                            <button onclick="generateBoothQr(2)" class="py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-bold border border-blue-100">BOOTH 2</button>
+                            <button onclick="generateBoothQr(3)" class="py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-bold border border-blue-100">BOOTH 3</button>
+                        </div>
+                        <div id="qrcode-wrapper" class="hidden p-4 bg-slate-50 rounded-2xl text-center border border-slate-100">
                             <p id="qr-label" class="text-[10px] font-bold text-slate-400 mb-3 uppercase tracking-tighter"></p>
                             <div id="qrcode" class="flex justify-center"></div>
                         </div>
@@ -195,19 +245,18 @@
                 </div>
             `);
             document.getElementById('staffVerify').onclick = handleStaffVerify;
+            document.getElementById('saveDeadline').onclick = handleSaveDeadline;
         };
 
         const renderDashboard = () => {
             exitBtn.classList.remove('hidden');
             const isLate = () => {
                 const now = new Date();
-                const d = new Date(); d.setHours(DEADLINE.hour, DEADLINE.min, 0);
+                const d = new Date(); d.setHours(globalDeadline.hour, globalDeadline.min, 0);
                 return now > d;
             };
-
             const stampList = Array.isArray(currentStudent.stamps) ? currentStudent.stamps : [];
             const stampCount = stampList.length;
-
             showView(`
                 <div class="space-y-4 animate-in slide-in-from-bottom-4">
                     <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100 flex items-center justify-between">
@@ -219,7 +268,6 @@
                             <i data-lucide="user" size="20"></i>
                         </div>
                     </div>
-
                     <div class="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
                         <div class="flex justify-between items-center mb-6">
                             <span class="font-bold">My Progress</span>
@@ -228,15 +276,12 @@
                         <div class="flex justify-between gap-3">
                             ${[1, 2, 3].map(i => {
                                 const hasStamp = stampList.includes(i);
-                                return `
-                                <div class="h-24 flex-1 rounded-2xl border-2 flex items-center justify-center transition-all duration-500 ${hasStamp ? 'bg-green-50 border-green-500' : 'bg-slate-50 border-dashed border-slate-200'}">
+                                return `<div class="h-24 flex-1 rounded-2xl border-2 flex items-center justify-center transition-all duration-500 ${hasStamp ? 'bg-green-50 border-green-500' : 'bg-slate-50 border-dashed border-slate-200'}">
                                     ${hasStamp ? '<i data-lucide="check-circle-2" class="text-green-500 stamp-active" size="32"></i>' : `<span class="text-[10px] font-bold text-slate-300">BOOTH ${i}</span>`}
-                                </div>
-                                `;
+                                </div>`;
                             }).join('')}
                         </div>
                     </div>
-
                     <div id="action-area">
                         ${stampCount < TOTAL_STAMPS ? `
                             <div class="bg-neutral-900 rounded-[2.5rem] p-8 text-white text-center shadow-xl">
@@ -249,24 +294,17 @@
                                     </div>
                                     <button id="cancelOtp" class="block w-full mt-8 text-xs text-neutral-500 hover:text-white underline">Cancel & Reset</button>
                                 ` : `
-                                    <div id="scanner-view" class="hidden">
-                                        <div id="reader" class="mb-4"></div>
-                                        <button id="closeScanner" class="text-xs text-slate-400 underline">Close Camera</button>
-                                    </div>
+                                    <div id="scanner-view" class="hidden"><div id="reader" class="mb-4"></div><button id="closeScanner" class="text-xs text-slate-400 underline">Close Camera</button></div>
                                     <div id="ready-view">
                                         <h4 class="font-bold text-xl mb-2">Collect a Stamp</h4>
-                                        <p class="text-neutral-400 text-sm mb-8 px-4">Find a booth QR code and scan it to get your code.</p>
-                                        <button id="startScanBtn" class="w-full bg-blue-600 py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 active:scale-95 flex items-center justify-center gap-2 transition-all">
-                                            <i data-lucide="camera" size="20"></i> Scan Booth QR
-                                        </button>
+                                        <p class="text-neutral-400 text-sm mb-8 px-4">Scan a booth QR code and show the code to staff.</p>
+                                        <button id="startScanBtn" class="w-full bg-blue-600 py-4 rounded-2xl font-bold shadow-lg shadow-blue-500/20 active:scale-95 flex items-center justify-center gap-2 transition-all"><i data-lucide="camera" size="20"></i> Scan Booth QR</button>
                                     </div>
                                 `}
                             </div>
                         ` : `
                             <div class="bg-white rounded-[2.5rem] p-8 shadow-sm border border-slate-100 text-center space-y-6">
-                                <div class="h-20 w-20 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto animate-bounce">
-                                    <i data-lucide="award" size="40"></i>
-                                </div>
+                                <div class="h-20 w-20 bg-yellow-100 text-yellow-600 rounded-full flex items-center justify-center mx-auto animate-bounce"><i data-lucide="award" size="40"></i></div>
                                 <h3 class="text-2xl font-extrabold text-slate-800">Activity Complete!</h3>
                                 <button id="finalSubmit" class="w-full bg-blue-600 text-white py-5 rounded-2xl font-black text-xl flex items-center justify-center gap-2 shadow-xl hover:bg-blue-700 active:scale-95 transition-all">
                                     ${isLate() ? 'Transcript Hours' : 'ลุ้นโชค (Lucky Draw)'}
@@ -277,110 +315,167 @@
                     </div>
                 </div>
             `);
-
             if (document.getElementById('startScanBtn')) document.getElementById('startScanBtn').onclick = startScanner;
             if (document.getElementById('cancelOtp')) document.getElementById('cancelOtp').onclick = handleCancelOtp;
             if (document.getElementById('finalSubmit')) document.getElementById('finalSubmit').onclick = handleFinalSubmit;
-            
             updateTimerDisplay();
         };
 
-        // --- Core Logic ---
+        // --- Logic Handlers ---
+
+        const handleInitialLogin = () => {
+            const input = document.getElementById('studentIdInput').value;
+            if (input.length !== 10) { alert("Please enter a valid 10-digit ID."); return; }
+            
+            document.getElementById('confirm-id-display').innerText = input;
+            confirmModal.classList.remove('hidden');
+            lucide.createIcons();
+            
+            let timeLeft = 3;
+            const btn = document.getElementById('modal-confirm-btn');
+            const timerText = document.getElementById('modal-timer-text');
+            
+            btn.disabled = true;
+            timerText.innerText = `Wait ${timeLeft}s`;
+            
+            const countdown = setInterval(() => {
+                timeLeft -= 1; 
+                timerText.innerText = `Wait ${timeLeft}s`;
+                if (timeLeft <= 0) { 
+                    clearInterval(countdown); 
+                    btn.disabled = false; 
+                    timerText.innerText = "Confirm ID"; 
+                }
+            }, 1000);
+
+            document.getElementById('modal-cancel-btn').onclick = () => { 
+                clearInterval(countdown); 
+                confirmModal.classList.add('hidden'); 
+            };
+            
+            btn.onclick = () => { 
+                confirmModal.classList.add('hidden'); 
+                handleLogin(input); 
+            };
+        };
+
+        async function handleLogin(studentId, isAutoLogin = false) {
+            if (isLoggingIn) return;
+            isLoggingIn = true;
+            
+            // UI state management for manual login
+            const errorDiv = document.getElementById('loginError');
+            const errorText = document.getElementById('errorText');
+            if (errorDiv) errorDiv.classList.add('hidden');
+
+            const deviceId = getDeviceId();
+            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', studentId);
+            
+            try {
+                const snap = await getDoc(docRef);
+                if (snap.exists()) {
+                    const data = snap.data();
+                    if (data.deviceId !== deviceId) {
+                        // Display error in the login UI instead of standard alert
+                        if (!isAutoLogin) {
+                            errorText.innerText = "This id has use in other device";
+                            errorDiv.classList.remove('hidden');
+                            lucide.createIcons();
+                        } else {
+                            // If auto-login fails due to multi-device, clear cache and reset to login screen
+                            clearStudentCache();
+                            renderLogin();
+                        }
+                        isLoggingIn = false; 
+                        return; 
+                    }
+                    currentStudent = data;
+                } else {
+                    currentStudent = { 
+                        studentNumber: studentId, 
+                        deviceId, 
+                        stamps: [], 
+                        otp: null, 
+                        otpExpiry: null, 
+                        targetBooth: null, 
+                        submitted: false 
+                    };
+                    await setDoc(docRef, currentStudent);
+                }
+                
+                // Cache the student ID for next visit
+                saveStudentCache(studentId);
+                startStudentSync();
+            } catch (e) { 
+                console.error("Login Error:", e);
+                if (!isAutoLogin) alert("Login Error: " + e.message); 
+                isLoggingIn = false; 
+                if (isAutoLogin) renderLogin();
+            }
+        }
+
+        const startStudentSync = () => {
+            if (unsubscribeStudent) unsubscribeStudent();
+            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
+            unsubscribeStudent = onSnapshot(docRef, (snap) => { 
+                if (snap.exists()) { 
+                    currentStudent = snap.data(); 
+                    if (!html5QrCode) renderDashboard(); 
+                } 
+            });
+        };
+
+        const startSettingsSync = () => {
+            if (unsubscribeSettings) unsubscribeSettings();
+            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'settings', 'config');
+            unsubscribeSettings = onSnapshot(docRef, (snap) => { 
+                if (snap.exists()) { 
+                    globalDeadline = snap.data(); 
+                    if (currentStudent && !html5QrCode) renderDashboard(); 
+                } 
+            });
+        };
+
+        async function handleSaveDeadline() {
+            const h = parseInt(document.getElementById('deadlineHour').value);
+            const m = parseInt(document.getElementById('deadlineMin').value);
+            if (isNaN(h) || h < 0 || h > 23 || isNaN(m) || m < 0 || m > 59) { alert("Invalid time values."); return; }
+            try {
+                const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'settings', 'config');
+                await setDoc(docRef, { hour: h, min: m });
+                alert("Deadline updated successfully!");
+            } catch (e) { alert("Failed to save settings: " + e.message); }
+        }
 
         const startScanner = () => {
             document.getElementById('ready-view').classList.add('hidden');
             document.getElementById('scanner-view').classList.remove('hidden');
             html5QrCode = new Html5Qrcode("reader");
             const config = { fps: 15, qrbox: { width: 250, height: 250 } };
-            
             html5QrCode.start({ facingMode: "environment" }, config, async (decodedText) => {
                 try {
                     const url = new URL(decodedText);
                     const boothStr = url.searchParams.get('booth');
                     if (boothStr) {
                         const boothId = parseInt(boothStr);
-                        
-                        // Stop scanner IMMEDIATELY so UI can refresh
                         await html5QrCode.stop();
                         html5QrCode = null;
-
-                        // Check for duplicate locally first for speed
                         const stampList = Array.isArray(currentStudent.stamps) ? currentStudent.stamps : [];
-                        if (stampList.includes(boothId)) {
-                            alert(`Booth ${boothId} is already completed! Please scan a different booth.`);
-                            renderDashboard();
-                        } else {
-                            handleRequestOtp(boothId);
+                        if (stampList.includes(boothId)) { 
+                            alert(`Booth ${boothId} is already completed!`); 
+                            renderDashboard(); 
                         }
+                        else { handleRequestOtp(boothId); }
                     }
                 } catch(e) { console.error("Invalid QR Link", e); }
-            }, () => {}).catch(err => { 
-                alert("Camera Error: " + err); 
-                renderDashboard(); 
-            });
-
-            document.getElementById('closeScanner').onclick = async () => {
-                if (html5QrCode) await html5QrCode.stop();
-                html5QrCode = null;
-                renderDashboard();
-            };
-        };
-
-        async function handleLogin() {
-            if (isLoggingIn) return;
-            const input = document.getElementById('studentIdInput').value;
-            const btn = document.getElementById('loginSubmit');
-            
-            if (input.length !== 10) return;
-
-            isLoggingIn = true;
-            btn.innerText = "Connecting...";
-            const deviceId = getDeviceId();
-            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', input);
-
-            try {
-                const snap = await getDoc(docRef);
-                if (snap.exists()) {
-                    const data = snap.data();
-                    if (data.deviceId !== deviceId) {
-                        alert("Access Denied: ID registered on another device.");
-                        isLoggingIn = false; btn.innerText = "Continue"; return;
-                    }
-                    currentStudent = data;
-                } else {
-                    currentStudent = { studentNumber: input, deviceId, stamps: [], otp: null, otpExpiry: null, targetBooth: null, submitted: false };
-                    await setDoc(docRef, currentStudent);
-                }
-                startStudentSync();
-            } catch (e) { alert("Login Error: " + e.message); isLoggingIn = false; btn.innerText = "Continue"; }
-        }
-
-        const startStudentSync = () => {
-            if (unsubscribeStudent) unsubscribeStudent();
-            const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
-            unsubscribeStudent = onSnapshot(docRef, (snap) => {
-                if (snap.exists()) { 
-                    currentStudent = snap.data(); 
-                    // Render UI only if scanner isn't currently using the container
-                    if (!html5QrCode) renderDashboard(); 
-                }
-            });
+            }, () => {}).catch(err => { alert("Camera Error: " + err); renderDashboard(); });
+            document.getElementById('closeScanner').onclick = async () => { if (html5QrCode) await html5QrCode.stop(); html5QrCode = null; renderDashboard(); };
         };
 
         async function handleRequestOtp(boothId) {
             const code = Array.from({length:4}, () => "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ".charAt(Math.floor(Math.random()*36))).join('');
             const expiry = Date.now() + (OTP_SECONDS * 1000);
             const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber);
-            
-            // Double-check DB before saving OTP to prevent race conditions on duplicates
-            const snap = await getDoc(docRef);
-            const data = snap.data();
-            if (Array.isArray(data.stamps) && data.stamps.includes(boothId)) {
-                alert("This booth is already stamped!");
-                renderDashboard();
-                return;
-            }
-
             await updateDoc(docRef, { otp: code, otpExpiry: expiry, targetBooth: boothId });
             renderDashboard();
         }
@@ -414,61 +509,64 @@
             const colRef = collection(db, 'artifacts', DB_PATH, 'public', 'data', 'participants');
             const q = query(colRef, where("otp", "==", code));
             const snap = await getDocs(q);
-            
             if (!snap.empty) {
-                const docSnap = snap.docs[0];
-                const userData = docSnap.data();
+                const docSnap = snap.docs[0]; const userData = docSnap.data();
                 if (userData.otpExpiry < Date.now()) { alert("Code expired."); return; }
-                
                 const card = document.getElementById('staff-user-card');
-                const stampList = Array.isArray(userData.stamps) ? userData.stamps : [];
-
-                card.innerHTML = `
-                    <div class="bg-blue-600 rounded-3xl p-8 text-white shadow-xl animate-in fade-in slide-in-from-bottom-4">
-                        <p class="text-[10px] uppercase font-bold text-blue-200 tracking-widest mb-1">Grant Stamp: Booth ${userData.targetBooth}</p>
-                        <h3 class="text-3xl font-mono font-bold mb-4">${userData.studentNumber}</h3>
-                        <div class="grid grid-cols-2 gap-3">
-                            <button id="staffCancel" class="py-4 bg-white/10 rounded-2xl font-bold">Cancel</button>
-                            <button id="staffConfirm" class="py-4 bg-white text-blue-600 rounded-2xl font-bold shadow-lg">Award Stamp</button>
-                        </div>
+                card.innerHTML = `<div class="bg-blue-600 rounded-3xl p-8 text-white shadow-xl animate-in fade-in slide-in-from-bottom-4">
+                    <p class="text-[10px] uppercase font-bold text-blue-200 tracking-widest mb-1">Grant Stamp: Booth ${userData.targetBooth}</p>
+                    <h3 class="text-3xl font-mono font-bold mb-4">${userData.studentNumber}</h3>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button id="staffCancel" class="py-4 bg-white/10 rounded-2xl font-bold">Cancel</button>
+                        <button id="staffConfirm" class="py-4 bg-white text-blue-600 rounded-2xl font-bold shadow-lg">Award Stamp</button>
                     </div>
-                `;
+                </div>`;
                 card.classList.remove('hidden'); lucide.createIcons();
-                
                 document.getElementById('staffCancel').onclick = () => card.classList.add('hidden');
                 document.getElementById('staffConfirm').onclick = async () => {
                     const docRef = doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', userData.studentNumber);
-                    
-                    await updateDoc(docRef, { 
-                        stamps: arrayUnion(userData.targetBooth), 
-                        otp: null, 
-                        otpExpiry: null,
-                        targetBooth: null 
-                    });
-                    
-                    card.classList.add('hidden'); 
-                    document.getElementById('staffOtpInput').value = "";
-                    alert("Stamp Granted Successfully!");
+                    await updateDoc(docRef, { stamps: arrayUnion(userData.targetBooth), otp: null, otpExpiry: null, targetBooth: null });
+                    card.classList.add('hidden'); document.getElementById('staffOtpInput').value = ""; alert("Stamp Granted!");
                 };
-            } else { alert("Invalid or Expired OTP"); }
+            } else { alert("Invalid OTP"); }
         }
 
         window.generateBoothQr = (id) => {
             const wrapper = document.getElementById('qrcode-wrapper');
             const label = document.getElementById('qr-label');
             const qrDiv = document.getElementById('qrcode');
-            wrapper.classList.remove('hidden');
-            label.innerText = `Scan for Booth ${id}`;
-            qrDiv.innerHTML = "";
+            wrapper.classList.remove('hidden'); label.innerText = `Scan for Booth ${id}`; qrDiv.innerHTML = "";
             const boothUrl = `${window.location.origin}${window.location.pathname}?booth=${id}`;
             new QRCode(qrDiv, { text: boothUrl, width: 160, height: 160 });
         };
 
-        exitBtn.onclick = () => { if (unsubscribeStudent) unsubscribeStudent(); currentStudent = null; renderLogin(); };
+        // --- Global Navigation ---
 
-        window.onload = async () => {
-            try { await signInAnonymously(auth); renderLogin(); } 
-            catch (e) { document.getElementById('status-display').innerText = "Firebase Error: " + e.message; }
+        exitBtn.onclick = () => { 
+            if (unsubscribeStudent) unsubscribeStudent(); 
+            currentStudent = null; 
+            isLoggingIn = false;
+            // Clear cache upon manual exit
+            clearStudentCache();
+            renderLogin(); 
+        };
+
+        window.onload = async () => { 
+            try { 
+                await signInAnonymously(auth); 
+                startSettingsSync(); 
+                
+                // Check if user should be auto-logged in
+                const cachedId = getStudentCache();
+                if (cachedId) {
+                    document.getElementById('status-text').innerText = "Logging in automatically...";
+                    handleLogin(cachedId, true);
+                } else {
+                    renderLogin(); 
+                }
+            } catch (e) { 
+                document.getElementById('status-display').innerHTML = `<p class="text-red-500 font-bold">Firebase Error</p><p class="text-xs text-slate-400 mt-2">${e.message}</p>`; 
+            } 
         };
     </script>
 </body>
