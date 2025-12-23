@@ -190,6 +190,12 @@
             }
         };
 
+        const getDeviceId = () => {
+            let id = localStorage.getItem('stamp_device_id');
+            if (!id) { id = crypto.randomUUID(); localStorage.setItem('stamp_device_id', id); }
+            return id;
+        };
+
         const saveStudentCache = (id) => localStorage.setItem('cached_student_id', id);
         const getStudentCache = () => localStorage.getItem('cached_student_id');
         const clearStudentCache = () => localStorage.removeItem('cached_student_id');
@@ -201,14 +207,14 @@
             showView(`
                 <div class="bg-white/80 rounded-[2.5rem] p-8 shadow-2xl glass-card text-center">
                     <h2 class="text-3xl font-bold mb-2 text-slate-800">ยินดีต้อนรับ</h2>
-                    <p class="text-slate-500 text-sm mb-8 font-medium">เข้าสู่กิจกรรมคริสต์มาสวิทยาศาสตร์</p>
+                    <p class="text-slate-500 text-sm mb-8 font-medium text-balance">เข้าสู่กิจกรรมคริสต์มาสวิทยาศาสตร์</p>
                     <div class="space-y-5">
                         <input type="text" id="studentIdInput" maxlength="10" placeholder="รหัสนักศึกษา" 
                             class="w-full border-2 border-slate-100 px-5 py-4 rounded-2xl text-xl font-mono text-center focus:border-[#d42426] outline-none shadow-sm uppercase">
                         <div id="loginError" class="hidden p-3 bg-red-50 text-red-600 text-[11px] rounded-xl flex items-center justify-center gap-2 font-bold">
                             <i data-lucide="alert-circle" size="14"></i> <span id="errorText"></span>
                         </div>
-                        <button id="loginSubmit" class="w-full bg-[#d42426] text-white py-4 rounded-2xl font-bold text-lg shadow-lg active:scale-95">เริ่มกิจกรรม</button>
+                        <button id="loginSubmit" class="w-full bg-[#d42426] text-white py-4 rounded-2xl font-bold text-lg shadow-lg active:scale-95 disabled:bg-slate-300">เริ่มกิจกรรม</button>
                     </div>
                     <div class="mt-10"><button id="staffAuthBtn" class="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Staff Only</button></div>
                 </div>
@@ -312,7 +318,7 @@
                                     <div id="scanner-view" class="hidden"><div id="reader" class="mb-4"></div><button id="closeScanner" class="text-xs text-slate-400 underline">ปิดกล้อง</button></div>
                                     <div id="ready-view">
                                         <h4 class="font-bold text-xl mb-2 text-white">สแกนรับตราปั๊ม</h4>
-                                        <p class="text-slate-400 text-xs mb-8 px-4 leading-relaxed font-medium">สแกน QR Code ที่บูธสอยดาว หรือบูธเพเพอร์มาเช</p>
+                                        <p class="text-slate-400 text-xs mb-8 px-4 leading-relaxed font-medium">สแกน QR Code ที่บูธเพื่อรับรหัสจากเจ้าหน้าที่</p>
                                         <button id="startScanBtn" class="w-full bg-[#d42426] py-4 rounded-2xl font-bold shadow-xl active:scale-95 flex items-center justify-center gap-3 transition-all"><i data-lucide="camera" size="22"></i> เริ่มสแกน</button>
                                     </div>
                                 `}
@@ -358,7 +364,7 @@
         // --- Logic Handlers ---
 
         const showExchangeModal = () => {
-            isSubmittingFinal = false; // Reset block
+            isSubmittingFinal = false; // รีเซ็ตตัวล็อกเพื่อให้กดยืนยันได้ใหม่
             exchangeModal.classList.remove('hidden');
             const input = document.getElementById('exchangePassInput');
             const confirmBtn = document.getElementById('exchange-confirm-btn');
@@ -380,7 +386,7 @@
 
         const handleInitialLogin = () => {
             const input = document.getElementById('studentIdInput').value;
-            if (input.length !== 10) { alert("กรอกรหัส 10 หลักครับ"); return; }
+            if (input.length !== 10) { alert("กรุณากรอกรหัส 10 หลัก"); return; }
             document.getElementById('confirm-id-display').innerText = input;
             confirmModal.classList.remove('hidden');
             let t = 3;
@@ -401,12 +407,13 @@
                 const snap = await getDoc(docRef);
                 const dev = getDeviceId();
                 if (snap.exists()) {
-                    if (snap.data().deviceId && snap.data().deviceId !== dev) {
+                    const data = snap.data();
+                    if (data.deviceId && data.deviceId !== dev) {
                         if (!auto) { document.getElementById('errorText').innerText = "รหัสนี้ถูกใช้ในเครื่องอื่นแล้ว"; document.getElementById('loginError').classList.remove('hidden'); }
                         else { clearStudentCache(); renderLogin(); }
                         isLoggingIn = false; return;
                     }
-                    currentStudent = snap.data();
+                    currentStudent = data;
                 } else {
                     currentStudent = { studentNumber: id, deviceId: dev, stamps: [], submittedLucky: false, submittedTrans: false };
                     await setDoc(docRef, currentStudent);
@@ -418,7 +425,7 @@
         const startStudentSync = () => {
             onSnapshot(doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber), (snap) => {
                 if (snap.exists()) { currentStudent = snap.data(); if (!html5QrCode) renderDashboard(); }
-            });
+            }, (err) => { console.error("Sync error:", err); });
         };
 
         const startSettingsSync = () => {
@@ -433,12 +440,13 @@
             html5QrCode = new Html5Qrcode("reader");
             html5QrCode.start({ facingMode: "environment" }, { fps: 15, qrbox: 250 }, async (txt) => {
                 try {
-                    const bid = parseInt(new URL(txt).searchParams.get('booth'));
-                    if (bid > 2) { alert("ใช้คนละเว็บไซต์ครับ"); return; }
+                    const url = new URL(txt);
+                    const bid = parseInt(url.searchParams.get('booth'));
+                    if (bid > 2) { alert("ใช้คนละกิจกรรมครับ"); return; }
                     await html5QrCode.stop(); html5QrCode = null;
                     if (currentStudent.stamps.includes(bid)) { alert("ได้ตราปั๊มบูธนี้ไปแล้วครับ"); renderDashboard(); }
                     else handleRequestOtp(bid);
-                } catch(e) {}
+                } catch(e) { console.error("Invalid QR Link", e); }
             }, () => {}).catch(() => renderDashboard());
             document.getElementById('closeScanner').onclick = async () => { if (html5QrCode) await html5QrCode.stop(); html5QrCode = null; renderDashboard(); };
         };
@@ -446,7 +454,11 @@
         async function handleRequestOtp(bid) {
             const ch = "123456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
             const code = Array.from({length:4}, () => ch.charAt(Math.floor(Math.random() * ch.length))).join('');
-            await updateDoc(doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber), { otp: code, otpExpiry: Date.now() + (OTP_SECONDS * 1000), targetBooth: bid });
+            await updateDoc(doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber), { 
+                otp: code, 
+                otpExpiry: Date.now() + (OTP_SECONDS * 1000), 
+                targetBooth: bid 
+            });
             renderDashboard();
         }
 
@@ -457,17 +469,21 @@
         async function handleFinalSubmit(type) {
             if (isSubmittingFinal) return false; isSubmittingFinal = true;
             try {
-                // Send to Google Sheets
+                // ส่งข้อมูลไป Google Sheets
                 await fetch(GOOGLE_SCRIPT_URL, {
-                    method: 'POST', mode: 'no-cors', cache: 'no-cache',
+                    method: 'POST', 
+                    mode: 'no-cors', 
+                    cache: 'no-cache',
                     body: JSON.stringify({ studentNumber: currentStudent.studentNumber, type: type })
                 });
-                // Update Firebase status based on type
+
+                // อัปเดต Firebase ตามประเภท
                 const updateData = {};
                 if (type === 'luckyDraw') updateData.submittedLucky = true;
                 else if (type === 'Transcript') updateData.submittedTrans = true;
                 
                 await updateDoc(doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', currentStudent.studentNumber), updateData);
+                
                 alert("ส่งข้อมูลสำเร็จเรียบร้อยแล้ว!");
                 return true;
             } catch (e) {
@@ -496,7 +512,7 @@
                 const u = snap.docs[0].data();
                 if (u.otpExpiry < Date.now()) { alert("รหัสหมดอายุ"); return; }
                 const card = document.getElementById('staff-user-card');
-                card.innerHTML = `<div class="bg-[#165b33] rounded-3xl p-8 text-white shadow-xl animate-in slide-in-from-bottom-4">
+                card.innerHTML = `<div class="bg-[#165b33] rounded-3xl p-8 text-white shadow-xl animate-in fade-in slide-in-from-bottom-4">
                     <p class="text-[10px] uppercase font-bold mb-1">บูธ: ${BOOTH_NAMES[u.targetBooth]}</p>
                     <h3 class="text-3xl font-mono font-bold mb-6">${u.studentNumber}</h3>
                     <div class="grid grid-cols-1 gap-3">
@@ -514,7 +530,9 @@
                     }
                 };
                 document.getElementById('staffConfirm').onclick = async () => {
-                    await updateDoc(doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', u.studentNumber), { stamps: arrayUnion(u.targetBooth), otp: null, otpExpiry: null, targetBooth: null });
+                    await updateDoc(doc(db, 'artifacts', DB_PATH, 'public', 'data', 'participants', u.studentNumber), { 
+                        stamps: arrayUnion(u.targetBooth), otp: null, otpExpiry: null, targetBooth: null 
+                    });
                     card.classList.add('hidden'); document.getElementById('staffOtpInput').value = "";
                 };
             } else alert("ไม่พบรหัสนี้");
@@ -525,7 +543,10 @@
             wrapper.classList.remove('hidden');
             document.getElementById('qr-label').innerText = BOOTH_NAMES[id];
             document.getElementById('qrcode').innerHTML = "";
-            new QRCode(document.getElementById('qrcode'), { text: `${window.location.origin}${window.location.pathname}?booth=${id}`, width: 160, height: 160 });
+            new QRCode(document.getElementById('qrcode'), { 
+                text: `${window.location.origin}${window.location.pathname}?booth=${id}`, 
+                width: 160, height: 160 
+            });
         };
 
         exitBtn.onclick = () => { clearStudentCache(); location.reload(); };
@@ -533,7 +554,8 @@
         window.onload = async () => { 
             initDecorations();
             try { 
-                await signInAnonymously(auth); startSettingsSync();
+                await signInAnonymously(auth); 
+                startSettingsSync();
                 const cachedId = getStudentCache();
                 if (cachedId) handleLogin(cachedId, true); else renderLogin(); 
             } catch (e) { document.getElementById('status-display').innerHTML = "ฐานข้อมูลไม่ตอบสนอง"; } 
